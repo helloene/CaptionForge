@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "captionforge"
+version = "0.1.0"
+description = "CLI tool for burning multi-format subtitles into videos with mixed Chinese/Latin fonts."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "CaptionForge" }]
+dependencies = [
+  "fonttools>=4.0",
+  "pillow>=10.0",
+  "pysubs2>=1.7.2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+
+[project.scripts]
+captionforge = "captionforge.cli:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
