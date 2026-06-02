@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from captionforge.fonts import FontRecord, default_font, match_font, search_fonts, system_font_dirs
+from captionforge.fonts import FontRecord, default_font, match_font, match_font_exact, search_fonts, system_font_dirs
 
 
 def test_system_font_dirs_returns_paths():
@@ -9,11 +9,13 @@ def test_system_font_dirs_returns_paths():
 
 def test_search_fonts_filters_records(monkeypatch):
     records = [
-        FontRecord("Alpha Sans", Path("/fonts/alpha.ttf")),
+        FontRecord("Alpha Sans", Path("/fonts/alpha.ttf"), full_name="Alpha Sans Regular", postscript_name="AlphaSans-Regular"),
         FontRecord("Beta Serif", Path("/fonts/beta.ttf")),
     ]
     monkeypatch.setattr("captionforge.fonts.list_fonts", lambda extra_dirs=None: records)
     assert search_fonts("alpha") == [records[0]]
+    assert search_fonts("regular") == [records[0]]
+    assert search_fonts("AlphaSans-Regular") == [records[0]]
 
 
 def test_match_font_uses_exact_match_without_fontconfig(monkeypatch):
@@ -21,6 +23,30 @@ def test_match_font_uses_exact_match_without_fontconfig(monkeypatch):
     monkeypatch.setattr("captionforge.fonts.shutil.which", lambda name: None)
     monkeypatch.setattr("captionforge.fonts.list_fonts", lambda extra_dirs=None: records)
     assert match_font("Alpha Sans") == records[0]
+
+
+def test_match_font_accepts_full_and_postscript_names(monkeypatch):
+    records = [
+        FontRecord(
+            "Alpha Sans",
+            Path("/fonts/alpha.ttf"),
+            full_name="Alpha Sans Bold",
+            postscript_name="AlphaSans-Bold",
+        )
+    ]
+    monkeypatch.setattr("captionforge.fonts.shutil.which", lambda name: None)
+    monkeypatch.setattr("captionforge.fonts.list_fonts", lambda extra_dirs=None: records)
+
+    assert match_font("Alpha Sans Bold") == records[0]
+    assert match_font("AlphaSans-Bold") == records[0]
+
+
+def test_match_font_exact_rejects_partial_matches(monkeypatch):
+    records = [FontRecord("Alpha Sans", Path("/fonts/alpha.ttf"), full_name="Alpha Sans Regular")]
+    monkeypatch.setattr("captionforge.fonts.list_fonts", lambda extra_dirs=None: records)
+
+    assert match_font_exact("Alpha Sans Regular") == records[0]
+    assert match_font_exact("Regular") is None
 
 
 def test_match_font_prefers_exact_match_before_fontconfig(monkeypatch):

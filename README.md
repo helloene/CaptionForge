@@ -29,6 +29,7 @@ It is designed for workflows that need precise subtitle styling and predictable 
 - Font names or local TTF/OTF font files
 - Automatic video resolution probing, `PlayResX/PlayResY` writing, and style scaling from a 1080p reference
 - Quality presets for hard-burned output
+- Standalone video transcoding to H.264, H.265/HEVC, AV1, or experimental H.266/VVC
 - Batch matching, subtitle labels in output filenames, and multi-version exports
 - Parallel batch jobs with whole-batch progress
 - Automatic video frame-rate probing for rounded overlay sync
@@ -67,9 +68,11 @@ git sparse-checkout set skills/captionforge-cli
 
 ## Requirements
 
-CaptionForge requires `ffmpeg` and `ffprobe`.
+CaptionForge is a source/CLI tool and does not bundle `ffmpeg` or `ffprobe`.
+They must be installed separately, or passed explicitly with environment variables.
+This is different from packaged desktop apps that may ship their own FFmpeg binaries.
 
-For ASS hard subtitles, ffmpeg must include the `ass` or `subtitles` filter, which requires libass.
+For ASS hard subtitles, your ffmpeg build must include the `ass` or `subtitles` filter, which requires libass. A minimal ffmpeg build may work for simple video tasks but fail when burning ASS subtitles.
 
 On macOS with Homebrew, the regular `ffmpeg` formula may not include libass. Install:
 
@@ -79,7 +82,7 @@ brew install ffmpeg-full
 
 `ffmpeg-full` is keg-only. CaptionForge automatically checks common Homebrew paths such as `/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg` for hard subtitle rendering, so you do not need to replace your default `ffmpeg`.
 
-On Windows, install an ffmpeg build that includes libass, then make sure `ffmpeg.exe` and `ffprobe.exe` are on `PATH`, or point CaptionForge to them with `CAPTIONFORGE_FFMPEG` and `CAPTIONFORGE_FFPROBE`.
+On Windows, download a full/static ffmpeg build that includes libass, such as builds from Gyan.dev or BtbN. Add the folder containing `ffmpeg.exe` and `ffprobe.exe` to `PATH`, or point CaptionForge to those two files with `CAPTIONFORGE_FFMPEG` and `CAPTIONFORGE_FFPROBE`.
 
 You can also choose binaries explicitly:
 
@@ -105,6 +108,8 @@ Use this table first:
 | Modern rounded caption box | `captionforge burn in.mp4 sub.srt -o out.mp4 --render-mode rounded --template rounded` |
 | White rounded caption box with black text | `captionforge burn in.mp4 sub.srt -o out.mp4 --render-mode rounded --template rounded-white` |
 | Keep subtitles selectable in the player | `captionforge burn in.mp4 sub.srt -o out.mp4 --mode soft` |
+| Convert H.264 to H.265/HEVC without subtitles | `captionforge transcode in.mp4 -o out.mp4 --codec hevc --quality high` |
+| Experimental H.266/VVC output in MOV | `captionforge transcode in.mp4 -o out.mov --codec h266 --quality high` |
 | Batch a folder | `captionforge batch ./videos -o ./out --dry-run` |
 | Generate styled ASS only | `captionforge ass sub.srt -o styled.ass --play-res 1920x1080` |
 
@@ -151,6 +156,22 @@ Generate styled ASS without rendering video:
 ```bash
 captionforge ass subtitles.vtt -o styled.ass \
   --play-res 1920x1080
+```
+
+Convert H.264 to H.265/HEVC while preserving the source resolution, frame timing, and audio track:
+
+```bash
+captionforge transcode input.mp4 -o output.mp4 \
+  --codec hevc \
+  --quality high
+```
+
+Write experimental H.266/VVC into a MOV container when your ffmpeg build includes `libvvenc`:
+
+```bash
+captionforge transcode input.mp4 -o output.mov \
+  --codec h266 \
+  --quality high
 ```
 
 ## Batch Workflows
@@ -444,7 +465,7 @@ Font discovery strategy:
 - On Windows, CaptionForge also scans `C:\\Windows\\Fonts` and `%LOCALAPPDATA%\\Microsoft\\Windows\\Fonts`.
 - On macOS, it scans system and user font directories such as `/System/Library/Fonts`, `/Library/Fonts`, and `~/Library/Fonts`.
 - On Linux, it scans common font directories such as `/usr/share/fonts`, `/usr/local/share/fonts`, `~/.fonts`, and `~/.local/share/fonts`.
-- Font family names are read from TTF/OTF/TTC files with `fontTools`.
+- Font family names, full names, and PostScript names are read from TTF/OTF/TTC files with `fontTools`.
 
 When no font is specified, CaptionForge chooses installed defaults from a fallback list. Latin text is resolved separately from CJK text so English letters do not fall back to PingFang. The fallback order prefers macOS families first, then Linux/open font families, then Windows families:
 
@@ -472,6 +493,16 @@ captionforge burn movie.mp4 captions.srt -o out.mp4 \
   --cjk-font-file ./fonts/NotoSansSC-Regular.otf \
   --latin-font-file ./fonts/Inter-Regular.otf
 ```
+
+Font files use the family name by default. To force a specific face when a family contains multiple weights, use the file's full name or PostScript name:
+
+```bash
+captionforge burn movie.mp4 captions.srt -o out.mp4 \
+  --latin-font-file ./fonts/Inter-Bold.otf \
+  --latin-font-name-source postscript
+```
+
+`captionforge font list`, `search`, and `match` print family, full name, PostScript name, path, and source. Rendering commands also print the matched full name and PostScript name before running, and explicit fonts fail fast when they do not exactly match a family, full name, or PostScript name.
 
 ASS mode can also scan an extra font directory:
 
@@ -545,14 +576,23 @@ Encoder options:
 - `--encoder nvenc`: NVIDIA NVENC (`h264_nvenc`, `hevc_nvenc`, or `av1_nvenc`)
 - `--encoder qsv`: Intel Quick Sync (`h264_qsv`, `hevc_qsv`, or `av1_qsv`)
 - `--encoder amf`: AMD AMF (`h264_amf`, `hevc_amf`, or `av1_amf`)
-- Exact encoder names such as `libx264`, `libx265`, `libsvtav1`, `libaom-av1`, `hevc_nvenc`, or `av1_qsv`
+- Exact encoder names such as `libx264`, `libx265`, `libsvtav1`, `libaom-av1`, `libvvenc`, `hevc_nvenc`, or `av1_qsv`
 
-By default, `--codec auto` follows h264/hevc/av1 input videos when possible. Choose the output video codec separately when you want to transcode:
+By default, `--codec auto` follows h264/hevc/av1/vvc input videos when possible. Choose the output video codec separately when you want to transcode during subtitle rendering:
 
 ```bash
 captionforge burn movie.mp4 captions.srt -o out.mp4 --codec hevc --encoder nvenc
 captionforge burn movie.mp4 captions.srt -o out.mp4 --codec av1 --encoder auto
+captionforge burn movie.mp4 captions.srt -o out.mov --codec h266
 captionforge burn movie.mp4 captions.srt -o out.mp4 --encoder libsvtav1
+```
+
+For pure format conversion without subtitles, use `transcode`. It keeps the original resolution and frame timing unless `--output-res` is set, and copies audio without re-encoding:
+
+```bash
+captionforge transcode movie.mp4 -o movie-hevc.mp4 --codec hevc --quality high
+captionforge transcode movie.mp4 -o movie-av1.mp4 --codec av1 --encoder auto
+captionforge transcode movie.mp4 -o movie-vvc.mov --codec vvc --quality high
 ```
 
 GPU encoding is applied to both ASS and rounded render modes. If automatic VideoToolbox encoding fails, CaptionForge retries with the CPU encoder for the same codec. Quality presets map to the encoder-specific parameters (VideoToolbox qscale, CQ for NVENC, global_quality for QSV, CQP for AMF).
@@ -563,6 +603,8 @@ AV1 follows the same auto-selection rules:
 - On Intel systems, `av1_qsv` is used when ffmpeg provides it.
 - On AMD systems, `av1_amf` is used when ffmpeg provides it.
 - On Apple Silicon, AV1 VideoToolbox encoding is normally unavailable, so CaptionForge skips VideoToolbox for AV1 and falls back to another available GPU encoder or CPU (`libsvtav1`, then `libaom-av1`).
+
+H.266/VVC is supported through `libvvenc` only. Your ffmpeg build must be configured with `--enable-libvvenc`; CaptionForge maps `--codec h266` to `vvc`, uses `libvvenc`, and applies quality through VVenC QP. MOV output is selected by using an `.mov` output path, but VVC playback compatibility is still limited compared with H.264, HEVC, and AV1.
 
 ## HDR Subtitle Brightness
 

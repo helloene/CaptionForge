@@ -117,6 +117,7 @@ ENCODER_CHOICES = [
     "libx265",
     "libsvtav1",
     "libaom-av1",
+    "libvvenc",
     "h264_nvenc",
     "hevc_nvenc",
     "av1_nvenc",
@@ -134,6 +135,7 @@ _CODEC_SOFTWARE = {
     "h264": "libx264",
     "hevc": "libx265",
     "av1": "libsvtav1",
+    "vvc": "libvvenc",
 }
 
 
@@ -197,7 +199,7 @@ def encode_args(output: Path, quality: str, encoder: str | None = None) -> list[
 
     enc = encoder or "libx264"
 
-    # Software encoders
+    # Software encoders share CRF-style quality control.
     if enc in ("libx264", "libx265"):
         return ["-c:v", enc, "-crf", crf, "-preset", preset]
 
@@ -209,7 +211,10 @@ def encode_args(output: Path, quality: str, encoder: str | None = None) -> list[
         aom_speed = {"slow": "2", "medium": "4", "fast": "6"}.get(preset, "4")
         return ["-c:v", "libaom-av1", "-crf", str(crf), "-cpu-used", aom_speed]
 
-    # NVENC (h264/hevc/av1)
+    if enc == "libvvenc":
+        return ["-c:v", "libvvenc", "-qp", str(crf), "-preset", preset, "-pix_fmt", "yuv420p10le"]
+
+    # NVENC uses constant-quality VBR across h264, hevc, and av1.
     if enc.endswith("_nvenc"):
         return [
             "-c:v", enc,
@@ -218,7 +223,7 @@ def encode_args(output: Path, quality: str, encoder: str | None = None) -> list[
             "-preset", preset,
         ]
 
-    # QSV (h264/hevc/av1)
+    # QSV exposes quality through global_quality for h264, hevc, and av1.
     if enc.endswith("_qsv"):
         return [
             "-c:v", enc,
@@ -226,7 +231,7 @@ def encode_args(output: Path, quality: str, encoder: str | None = None) -> list[
             "-preset", preset,
         ]
 
-    # AMF (h264/hevc)
+    # AMF uses CQP values and maps presets to quality/balanced/speed.
     if enc.endswith("_amf"):
         amf_preset = "quality" if preset == "slow" else "balanced" if preset == "medium" else "speed"
         return [
@@ -283,6 +288,8 @@ def probe_video_codec(video: Path) -> str:
         return "hevc"
     if codec in {"av1"}:
         return "av1"
+    if codec in {"vvc", "h266"}:
+        return "vvc"
     return "h264"
 
 
@@ -329,7 +336,7 @@ def probe_fps(video: Path) -> float:
         return 24.0
     if r_rate <= 0:
         return avg_rate
-    # VFR videos: trust avg_frame_rate when it differs significantly from r_frame_rate
+    # For VFR inputs, prefer avg_frame_rate when it meaningfully differs from r_frame_rate.
     if avg_rate > 0 and abs(r_rate - avg_rate) / max(r_rate, 1.0) > 0.05:
         return avg_rate
     return r_rate
@@ -419,6 +426,54 @@ def burn_subtitles(
         "copy",
         *encode_args(output, quality, encoder),
     ]
+    if extra_args:
+        cmd.extend(extra_args)
+    cmd.append(str(output))
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError:
+        if not fallback_encoder or fallback_encoder == encoder:
+            raise
+        fallback_cmd = [
+            *cmd[: cmd.index("-c:a") + 2],
+            *encode_args(output, quality, fallback_encoder),
+        ]
+        if extra_args:
+            fallback_cmd.extend(extra_args)
+        fallback_cmd.append(str(output))
+        print(f"[CaptionForge] Encoder {encoder} failed; retrying with {fallback_encoder}.", flush=True)
+        subprocess.run(fallback_cmd, check=True)
+
+
+def transcode_video(
+    video: Path,
+    output: Path,
+    quality: str = "medium",
+    verbose: bool = False,
+    encoder: str | None = None,
+    ffmpeg: str | None = None,
+    output_res: tuple[int, int] | None = None,
+    extra_args: list[str] | None = None,
+    fallback_encoder: str | None = None,
+) -> None:
+    ffmpeg = ffmpeg or require_ffmpeg()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "info" if verbose else "error",
+        "-i",
+        str(video),
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a?",
+    ]
+    if output_res:
+        cmd.extend(["-vf", f"scale={output_res[0]}:{output_res[1]}:flags=lanczos"])
+    cmd.extend(["-c:a", "copy", *encode_args(output, quality, encoder)])
     if extra_args:
         cmd.extend(extra_args)
     cmd.append(str(output))

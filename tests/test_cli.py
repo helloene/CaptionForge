@@ -13,10 +13,12 @@ from captionforge.cli import (
     parse_play_res,
     resolve_codec,
     burn_one,
+    transcode_one,
     run_batch_jobs,
     style_from_args,
     subtitle_match_score,
     print_selected_default_fonts,
+    print_selected_font_faces,
     load_font_rules,
     BatchMatch,
     batch_outputs_for_match,
@@ -131,6 +133,45 @@ def test_cjk_font_file_sets_style_family(monkeypatch, tmp_path):
     assert style.cjk_font == "Custom CJK"
 
 
+def test_latin_font_file_can_use_postscript_name(monkeypatch, tmp_path):
+    font_file = tmp_path / "CustomLatin.otf"
+    font_file.write_bytes(b"")
+    monkeypatch.setattr("captionforge.cli.default_font", lambda role, extra_dirs=None: "ignored")
+
+    class FakeNames:
+        def selected(self, source):
+            assert source == "postscript"
+            return "CustomLatin-Regular"
+
+    monkeypatch.setattr("captionforge.cli.font_names", lambda path: FakeNames())
+
+    style = style_from_args(base_args(latin_font_file=font_file, latin_font_name_source="postscript"))
+
+    assert style.latin_font == "CustomLatin-Regular"
+
+
+def test_print_selected_font_faces_reports_full_name(monkeypatch, capsys):
+    record = type(
+        "Record",
+        (),
+        {
+            "family": "Alpha Sans",
+            "full_name": "Alpha Sans Regular",
+            "postscript_name": "AlphaSans-Regular",
+            "path": "/fonts/alpha.ttf",
+            "source": "scan",
+        },
+    )()
+    monkeypatch.setattr("captionforge.cli.default_font", lambda role, extra_dirs=None: "ignored")
+    monkeypatch.setattr("captionforge.cli.match_font", lambda name, font_dirs=None: record)
+
+    print_selected_font_faces(base_args(font_dir=[]), style_from_args(base_args(cjk_font="Alpha Sans", latin_font="Alpha Sans", font_dir=[])))
+
+    captured = capsys.readouterr()
+    assert "full=Alpha Sans Regular" in captured.err
+    assert "postscript=AlphaSans-Regular" in captured.err
+
+
 def test_ass_font_dirs_stages_repeated_font_dirs(tmp_path):
     first_dir = tmp_path / "first"
     second_dir = tmp_path / "second"
@@ -176,6 +217,24 @@ def test_burn_command_accepts_exact_hevc_and_av1_encoders():
 
     assert hevc_args.encoder == "hevc_nvenc"
     assert av1_args.encoder == "libsvtav1"
+
+
+def test_transcode_command_parses_hevc_request():
+    args = build_parser().parse_args(["transcode", "in.mp4", "-o", "out.mp4", "--codec", "hevc", "--quality", "high"])
+
+    assert args.command == "transcode"
+    assert args.video.name == "in.mp4"
+    assert args.output.name == "out.mp4"
+    assert args.codec == "hevc"
+    assert args.quality == "high"
+
+
+def test_transcode_command_accepts_h266_alias_and_mov_output():
+    args = build_parser().parse_args(["transcode", "in.mp4", "-o", "out.mov", "--codec", "h266"])
+
+    assert args.command == "transcode"
+    assert args.output.suffix == ".mov"
+    assert args.codec == "h266"
 
 
 def test_burn_command_accepts_preview_format():
@@ -503,6 +562,7 @@ def test_resolve_codec_auto_follows_probe(monkeypatch, tmp_path):
 
     assert resolve_codec(tmp_path / "movie.mp4", "auto") == "hevc"
     assert resolve_codec(tmp_path / "movie.mp4", "h264") == "h264"
+    assert resolve_codec(tmp_path / "movie.mp4", "h266") == "vvc"
 
 
 def test_burn_one_sets_cpu_fallback_for_auto_videotoolbox(monkeypatch, tmp_path):
@@ -540,3 +600,65 @@ def test_burn_one_sets_cpu_fallback_for_auto_videotoolbox(monkeypatch, tmp_path)
 
     assert captured["encoder"] == "hevc_videotoolbox"
     assert captured["fallback_encoder"] == "libx265"
+
+
+def test_transcode_one_selects_encoder_and_preserves_default_resolution(monkeypatch, tmp_path):
+    captured = {}
+    args = base_args(
+        video=tmp_path / "in.mp4",
+        output=tmp_path / "out.mp4",
+        quality="high",
+        encoder="auto",
+        codec="hevc",
+        output_res=None,
+        ffmpeg_arg=[],
+        verbose_ffmpeg=False,
+    )
+
+    monkeypatch.setattr("captionforge.cli.ffmpeg_path", lambda require_subtitles=False: "/opt/ffmpeg/bin/ffmpeg")
+
+    def fake_select_encoder(preferred, codec, ffmpeg=None):
+        captured["select"] = (preferred, codec, ffmpeg)
+        return "libx265"
+
+    monkeypatch.setattr("captionforge.cli.select_encoder", fake_select_encoder)
+
+    def fake_transcode_video(video, output, quality, verbose, encoder, ffmpeg=None, output_res=None, extra_args=None, fallback_encoder=None):
+        captured["transcode"] = (video, output, quality, verbose, encoder, ffmpeg, output_res, extra_args, fallback_encoder)
+
+    monkeypatch.setattr("captionforge.cli.transcode_video", fake_transcode_video)
+
+    transcode_one(args)
+
+    assert captured["select"] == ("auto", "hevc", "/opt/ffmpeg/bin/ffmpeg")
+    assert captured["transcode"][4] == "libx265"
+    assert captured["transcode"][6] is None
+
+
+def test_transcode_one_selects_vvc_encoder_from_h266_alias(monkeypatch, tmp_path):
+    captured = {}
+    args = base_args(
+        video=tmp_path / "in.mp4",
+        output=tmp_path / "out.mov",
+        quality="high",
+        encoder="auto",
+        codec="h266",
+        output_res=None,
+        ffmpeg_arg=[],
+        verbose_ffmpeg=False,
+    )
+
+    monkeypatch.setattr("captionforge.cli.ffmpeg_path", lambda require_subtitles=False: "/opt/ffmpeg/bin/ffmpeg")
+
+    def fake_select_encoder(preferred, codec, ffmpeg=None):
+        captured["select"] = (preferred, codec, ffmpeg)
+        return "libvvenc"
+
+    monkeypatch.setattr("captionforge.cli.select_encoder", fake_select_encoder)
+    monkeypatch.setattr("captionforge.cli.transcode_video", lambda *args, **kwargs: captured.setdefault("transcode", args))
+
+    transcode_one(args)
+
+    assert captured["select"] == ("auto", "vvc", "/opt/ffmpeg/bin/ffmpeg")
+    assert captured["transcode"][1].suffix == ".mov"
+    assert captured["transcode"][4] == "libvvenc"

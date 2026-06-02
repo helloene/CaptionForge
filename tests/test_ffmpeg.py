@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from captionforge.ffmpeg import burn_subtitles, encode_args, escape_filter_path, ffmpeg_path, probe_fps, probe_video_codec, select_encoder, soft_subtitles
+from captionforge.ffmpeg import burn_subtitles, encode_args, escape_filter_path, ffmpeg_path, probe_fps, probe_video_codec, select_encoder, soft_subtitles, transcode_video
 
 
 def test_escape_filter_path_escapes_filtergraph_special_chars():
@@ -21,6 +21,10 @@ def test_encode_args_supports_hevc_software_encoder():
 
 def test_encode_args_supports_av1_software_encoder():
     assert encode_args(Path("out.mp4"), "low", "libsvtav1") == ["-c:v", "libsvtav1", "-crf", "32", "-preset", "8"]
+
+
+def test_encode_args_supports_vvc_software_encoder():
+    assert encode_args(Path("out.mov"), "high", "libvvenc") == ["-c:v", "libvvenc", "-qp", "23", "-preset", "medium", "-pix_fmt", "yuv420p10le"]
 
 
 def test_encode_args_supports_exact_gpu_encoder():
@@ -78,6 +82,12 @@ def test_select_encoder_platform_falls_back_when_unavailable(monkeypatch):
     assert select_encoder("videotoolbox", "av1", "/opt/homebrew/bin/ffmpeg") == "libsvtav1"
 
 
+def test_select_encoder_uses_vvc_software_encoder(monkeypatch):
+    monkeypatch.setattr("captionforge.ffmpeg.available_encoders", lambda ffmpeg=None: {"libvvenc"})
+
+    assert select_encoder("auto", "vvc", "/opt/ffmpeg/bin/ffmpeg") == "libvvenc"
+
+
 def test_ffmpeg_env_override(monkeypatch):
     monkeypatch.setenv("CAPTIONFORGE_FFMPEG", "/bin/echo")
     assert ffmpeg_path() == "/bin/echo"
@@ -101,6 +111,16 @@ def test_probe_video_codec_maps_hevc(monkeypatch, tmp_path):
     monkeypatch.setattr("captionforge.ffmpeg.subprocess.run", lambda *args, **kwargs: Result())
 
     assert probe_video_codec(tmp_path / "in.mp4") == "hevc"
+
+
+def test_probe_video_codec_maps_vvc(monkeypatch, tmp_path):
+    class Result:
+        stdout = "vvc\n"
+
+    monkeypatch.setattr("captionforge.ffmpeg.ffprobe_path", lambda: "/bin/echo")
+    monkeypatch.setattr("captionforge.ffmpeg.subprocess.run", lambda *args, **kwargs: Result())
+
+    assert probe_video_codec(tmp_path / "in.mov") == "vvc"
 
 
 def test_burn_subtitles_uses_quiet_ffmpeg(monkeypatch, tmp_path):
@@ -168,3 +188,29 @@ def test_soft_subtitles_maps_video_audio_and_new_subtitle(monkeypatch, tmp_path)
     assert "0:v:0" in captured["cmd"]
     assert "0:a?" in captured["cmd"]
     assert "1:0" in captured["cmd"]
+
+
+def test_transcode_video_maps_video_audio_and_preserves_size_without_filter(monkeypatch, tmp_path):
+    captured = {}
+
+    monkeypatch.setattr("captionforge.ffmpeg.require_ffmpeg", lambda: "/bin/echo")
+    monkeypatch.setattr("captionforge.ffmpeg.subprocess.run", lambda cmd, check: captured.setdefault("cmd", cmd))
+
+    transcode_video(tmp_path / "in.mp4", tmp_path / "out.mp4", quality="high", encoder="libx265")
+
+    assert captured["cmd"][captured["cmd"].index("-map") + 1 : captured["cmd"].index("-map") + 2] == ["0:v:0"]
+    assert "0:a?" in captured["cmd"]
+    assert "-vf" not in captured["cmd"]
+    assert captured["cmd"][captured["cmd"].index("-c:a") + 1] == "copy"
+    assert "libx265" in captured["cmd"]
+
+
+def test_transcode_video_can_scale_when_output_res_is_requested(monkeypatch, tmp_path):
+    captured = {}
+
+    monkeypatch.setattr("captionforge.ffmpeg.require_ffmpeg", lambda: "/bin/echo")
+    monkeypatch.setattr("captionforge.ffmpeg.subprocess.run", lambda cmd, check: captured.setdefault("cmd", cmd))
+
+    transcode_video(tmp_path / "in.mp4", tmp_path / "out.mp4", output_res=(3840, 2160))
+
+    assert captured["cmd"][captured["cmd"].index("-vf") + 1] == "scale=3840:2160:flags=lanczos"

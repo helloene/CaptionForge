@@ -33,6 +33,22 @@ class CaptionStyle:
     line_spacing: int = 8
 
 
+@dataclass(frozen=True)
+class FontNames:
+    family: str
+    full_name: str | None = None
+    postscript_name: str | None = None
+
+    def selected(self, source: str) -> str:
+        if source == "family":
+            return self.family
+        if source == "full":
+            return self.full_name or self.family
+        if source == "postscript":
+            return self.postscript_name or self.full_name or self.family
+        raise ValueError("Font name source must be 'family', 'full', or 'postscript'")
+
+
 def scaled_style(style: CaptionStyle, scale: float) -> CaptionStyle:
     if scale == 1:
         return style
@@ -119,21 +135,25 @@ def apply_style_override(style: CaptionStyle, override: dict[str, Any]) -> Capti
 
 
 def font_family_name(font_path: Path) -> str:
+    return font_names(font_path).family
+
+
+def font_names(font_path: Path) -> FontNames:
     from fontTools.ttLib import TTCollection, TTFont
 
     if font_path.suffix.lower() in {".ttc", ".otc"}:
         collection = TTCollection(str(font_path))
         try:
             if not collection.fonts:
-                return font_path.stem
+                return FontNames(font_path.stem)
             font = collection.fonts[0]
-            return _font_family_from_ttfont(font, font_path)
+            return _font_names_from_ttfont(font, font_path)
         finally:
             collection.close()
 
     font = TTFont(str(font_path))
     try:
-        return _font_family_from_ttfont(font, font_path)
+        return _font_names_from_ttfont(font, font_path)
     finally:
         font.close()
 
@@ -165,17 +185,32 @@ def _font_family_from_ttfont(font: Any, font_path: Path) -> str:
     return names[0] if names else font_path.stem
 
 
+def _font_names_from_ttfont(font: Any, font_path: Path) -> FontNames:
+    family = _font_family_from_ttfont(font, font_path)
+    full_names = _font_name_values(font, 4)
+    postscript_names = _font_name_values(font, 6)
+    return FontNames(
+        family=family,
+        full_name=full_names[0] if full_names else None,
+        postscript_name=postscript_names[0] if postscript_names else None,
+    )
+
+
 def _font_family_names_from_ttfont(font: Any) -> list[str]:
+    return _font_name_values(font, 1)
+
+
+def _font_name_values(font: Any, name_id: int) -> list[str]:
     names = []
     for platform_id, encoding_id, language_id in (
         (3, 1, 0x409),
         (1, 0, 0),
     ):
-        name = font["name"].getName(1, platform_id, encoding_id, language_id)
+        name = font["name"].getName(name_id, platform_id, encoding_id, language_id)
         if name:
             names.append(name.toUnicode())
     for name in font["name"].names:
-        if name.nameID == 1:
+        if name.nameID == name_id:
             names.append(name.toUnicode())
     deduped = []
     seen = set()

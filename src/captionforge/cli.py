@@ -23,11 +23,12 @@ from .ffmpeg import (
     probe_video_size,
     select_encoder,
     soft_subtitles,
+    transcode_video,
 )
-from .fonts import default_font, list_fonts, match_font, search_fonts
+from .fonts import default_font, list_fonts, match_font, match_font_exact, search_fonts
 from .fontsplit import FontRule, font_rule_from_dict
 from .rounded import FontSources, rounded_subtitles
-from .styles import CaptionStyle, apply_style_override, font_family_name
+from .styles import CaptionStyle, apply_style_override, font_family_name, font_names
 from .subtitles import write_ass, write_multi_ass
 from .templates import BUILTIN_TEMPLATES, load_template, style_from_template, template_json, template_names
 
@@ -35,6 +36,7 @@ from .templates import BUILTIN_TEMPLATES, load_template, style_from_template, te
 VIDEO_EXTENSIONS = {".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi"}
 SUBTITLE_EXTENSIONS = {".srt", ".ass", ".ssa", ".vtt", ".sub"}
 FONT_EXTENSIONS = {".ttf", ".ttc", ".otf", ".otc"}
+CODEC_CHOICES = ["auto", "h264", "hevc", "av1", "vvc", "h266"]
 DEFAULT_SUBTITLE_TAGS = ["zh", "zh-cn", "zh-hans", "zh-hant", "cn", "chs", "cht"]
 LANG_SEPARATORS = ".-_ "
 FIELD_RE = re.compile(r"[._\-\s]+")
@@ -105,9 +107,9 @@ def style_from_args(args: Namespace) -> CaptionStyle:
             overrides[field_name] = value
 
     if "cjk_font" not in overrides:
-        overrides["cjk_font"] = font_family_name(args.cjk_font_file) if getattr(args, "cjk_font_file", None) else style.cjk_font
+        overrides["cjk_font"] = font_name_from_file(args.cjk_font_file, getattr(args, "cjk_font_name_source", "family")) if getattr(args, "cjk_font_file", None) else style.cjk_font
     if "latin_font" not in overrides:
-        overrides["latin_font"] = font_family_name(args.latin_font_file) if getattr(args, "latin_font_file", None) else style.latin_font
+        overrides["latin_font"] = font_name_from_file(args.latin_font_file, getattr(args, "latin_font_name_source", "family")) if getattr(args, "latin_font_file", None) else style.latin_font
 
     if overrides:
         style = apply_style_override(style, overrides)
@@ -117,6 +119,24 @@ def style_from_args(args: Namespace) -> CaptionStyle:
             raise ValueError("--style-override must be a JSON object")
         style = apply_style_override(style, override)
     return style
+
+
+def font_name_from_file(path: Path, source: str) -> str:
+    if source == "family":
+        return font_family_name(path)
+    return font_names(path).selected(source)
+
+
+def format_font_record(record) -> str:
+    return "\t".join(
+        [
+            record.family,
+            record.full_name or "",
+            record.postscript_name or "",
+            str(record.path),
+            record.source,
+        ]
+    )
 
 
 def print_selected_default_fonts(args: Namespace, style: CaptionStyle) -> None:
@@ -136,6 +156,34 @@ def print_selected_default_fonts(args: Namespace, style: CaptionStyle) -> None:
         if cjk:
             parts.append(f"CJK={cjk}")
         print(f"[CaptionForge] Selected default fonts: {', '.join(parts)}", file=sys.stderr)
+
+
+def print_selected_font_faces(args: Namespace, style: CaptionStyle) -> None:
+    font_dirs = font_dirs_from_args(args)
+    parts = []
+    for role, selected in (("Latin", style.latin_font), ("CJK", style.cjk_font)):
+        record = match_font(selected, font_dirs)
+        if not record:
+            parts.append(f"{role}={selected} (unmatched)")
+            continue
+        details = [f"{role}={selected}"]
+        if record.full_name:
+            details.append(f"full={record.full_name}")
+        if record.postscript_name:
+            details.append(f"postscript={record.postscript_name}")
+        details.append(f"file={record.path}")
+        parts.append(f"{details[0]} ({', '.join(details[1:])})")
+    print(f"[CaptionForge] Font faces: {', '.join(parts)}", file=sys.stderr)
+
+
+def validate_explicit_fonts(args: Namespace, style: CaptionStyle) -> None:
+    font_dirs = font_dirs_from_args(args)
+    for role, selected, explicit_name, explicit_file in (
+        ("Latin", style.latin_font, getattr(args, "latin_font", None), getattr(args, "latin_font_file", None)),
+        ("CJK", style.cjk_font, getattr(args, "cjk_font", None), getattr(args, "cjk_font_file", None)),
+    ):
+        if (explicit_name or explicit_file) and not match_font_exact(selected, font_dirs):
+            raise ValueError(f"{role} font did not exactly match an installed or provided font family, full name, or PostScript name: {selected}")
 
 
 def load_font_rules(args: Namespace) -> list[FontRule]:
@@ -239,6 +287,8 @@ def parse_resolution(value: str, option_name: str = "--output-res") -> tuple[int
 def resolve_codec(video: Path, requested: str) -> str:
     if requested == "auto":
         return probe_video_codec(video)
+    if requested == "h266":
+        return "vvc"
     return requested
 
 
@@ -592,12 +642,33 @@ def burn_one(
             burn_subtitles(video, ass_path, output, args.ffmpeg_arg, args.quality, font_dirs, args.verbose_ffmpeg, encoder, ffmpeg, output_res, fallback_encoder)
 
 
+def transcode_one(args: Namespace) -> None:
+    ffmpeg = ffmpeg_path(require_subtitles=False)
+    output_res = parse_resolution(args.output_res) if getattr(args, "output_res", None) else None
+    codec = resolve_codec(args.video, args.codec)
+    encoder = select_encoder(args.encoder, codec, ffmpeg)
+    fallback_encoder = select_encoder("cpu", codec, ffmpeg) if args.encoder == "auto" and encoder.endswith("_videotoolbox") else None
+    transcode_video(
+        args.video,
+        args.output,
+        args.quality,
+        args.verbose_ffmpeg,
+        encoder,
+        ffmpeg,
+        output_res,
+        args.ffmpeg_arg,
+        fallback_encoder,
+    )
+
+
 def add_style_args(parser: ArgumentParser) -> None:
     parser.add_argument("--template", help="Built-in template name or path to a JSON template.")
     parser.add_argument("--cjk-font", help="Font used for Chinese/CJK characters.")
     parser.add_argument("--latin-font", help="Font used for Latin letters and digits.")
     parser.add_argument("--cjk-font-file", type=Path, help="TTF/OTF file used for Chinese/CJK characters.")
     parser.add_argument("--latin-font-file", type=Path, help="TTF/OTF file used for Latin letters and digits.")
+    parser.add_argument("--cjk-font-name-source", choices=["family", "full", "postscript"], default="family", help="Name table field to use from --cjk-font-file. Defaults to family.")
+    parser.add_argument("--latin-font-name-source", choices=["family", "full", "postscript"], default="family", help="Name table field to use from --latin-font-file. Defaults to family.")
     parser.add_argument("--font-dir", type=Path, action="append", default=[], help="Extra font directory for libass; repeat as needed.")
     parser.add_argument("--font-size", type=int)
     parser.add_argument("--primary-color")
@@ -666,8 +737,8 @@ def build_parser() -> ArgumentParser:
     burn_parser.add_argument("--render-mode", choices=["ass", "rounded"], default="ass", help="Hard-subtitle renderer.")
     burn_parser.add_argument("--multi-subtitle-layout", choices=["stack", "merge"], default="stack", help="For multiple ASS subtitles: stack separate lines or merge active text with line breaks.")
     burn_parser.add_argument("--quality", choices=QUALITY_PRESETS.keys(), default="medium", help="Encoding quality for hard mode.")
-    burn_parser.add_argument("--encoder", choices=ENCODER_CHOICES, default="auto", help="Video encoder platform or exact ffmpeg encoder. auto picks the best available (NVENC > QSV > AMF > CPU).")
-    burn_parser.add_argument("--codec", choices=["auto", "h264", "hevc", "av1"], default="auto", help="Output video codec. auto follows h264/hevc/av1 input when possible.")
+    burn_parser.add_argument("--encoder", choices=ENCODER_CHOICES, default="auto", help="Video encoder platform or exact ffmpeg encoder. auto picks VideoToolbox on macOS, then NVENC > QSV > AMF > CPU.")
+    burn_parser.add_argument("--codec", choices=CODEC_CHOICES, default="auto", help="Output video codec. auto follows h264/hevc/av1/vvc input when possible; h266 is an alias for vvc.")
     burn_parser.add_argument("--rounded-fps", type=int, default=None, help="Overlay frame rate for rounded render mode. Defaults to video frame rate.")
     burn_parser.add_argument("--preview-image", type=Path, help="Write a rounded subtitle preview image before encoding.")
     burn_parser.add_argument("--preview-format", choices=["auto", "png", "jpg", "jpeg", "avif", "jxl"], default="auto", help="Preview image format. auto writes PNG for SDR and AVIF for HDR.")
@@ -676,6 +747,16 @@ def build_parser() -> ArgumentParser:
     burn_parser.add_argument("--ffmpeg-arg", action="append", default=[], help="Extra ffmpeg output argument; repeat as needed.")
     burn_parser.add_argument("--verbose-ffmpeg", action="store_true", help="Show ffmpeg progress and diagnostic logs.")
     add_style_args(burn_parser)
+
+    transcode_parser = subparsers.add_parser("transcode", help="Convert video encoding without adding subtitles.")
+    transcode_parser.add_argument("video", type=Path)
+    transcode_parser.add_argument("-o", "--output", type=Path, required=True)
+    transcode_parser.add_argument("--quality", choices=QUALITY_PRESETS.keys(), default="medium", help="Encoding quality. high keeps more detail; medium is smaller.")
+    transcode_parser.add_argument("--encoder", choices=ENCODER_CHOICES, default="auto", help="Video encoder platform or exact ffmpeg encoder. auto picks VideoToolbox on macOS, then NVENC > QSV > AMF > CPU.")
+    transcode_parser.add_argument("--codec", choices=CODEC_CHOICES, default="auto", help="Output video codec. Use hevc for H.265 or vvc/h266 for H.266.")
+    transcode_parser.add_argument("--output-res", help="Force output video resolution, formatted like 3840x2160. Defaults to the input video resolution.")
+    transcode_parser.add_argument("--ffmpeg-arg", action="append", default=[], help="Extra ffmpeg output argument; repeat as needed.")
+    transcode_parser.add_argument("--verbose-ffmpeg", action="store_true", help="Show ffmpeg progress and diagnostic logs.")
 
     batch_parser = subparsers.add_parser("batch", help="Add matching subtitles to every video in a directory.")
     batch_parser.add_argument("input_dir", type=Path)
@@ -693,8 +774,8 @@ def build_parser() -> ArgumentParser:
     batch_parser.add_argument("--render-mode", choices=["ass", "rounded"], default="ass", help="Hard-subtitle renderer.")
     batch_parser.add_argument("--multi-subtitle-layout", choices=["stack", "merge"], default="stack", help="For multiple ASS subtitles: stack separate lines or merge active text with line breaks.")
     batch_parser.add_argument("--quality", choices=QUALITY_PRESETS.keys(), default="medium", help="Encoding quality for hard mode.")
-    batch_parser.add_argument("--encoder", choices=ENCODER_CHOICES, default="auto", help="Video encoder platform or exact ffmpeg encoder. auto picks the best available (NVENC > QSV > AMF > CPU).")
-    batch_parser.add_argument("--codec", choices=["auto", "h264", "hevc", "av1"], default="auto", help="Output video codec. auto follows h264/hevc/av1 input when possible.")
+    batch_parser.add_argument("--encoder", choices=ENCODER_CHOICES, default="auto", help="Video encoder platform or exact ffmpeg encoder. auto picks VideoToolbox on macOS, then NVENC > QSV > AMF > CPU.")
+    batch_parser.add_argument("--codec", choices=CODEC_CHOICES, default="auto", help="Output video codec. auto follows h264/hevc/av1/vvc input when possible; h266 is an alias for vvc.")
     batch_parser.add_argument("--rounded-fps", type=int, default=None, help="Overlay frame rate for rounded render mode. Defaults to video frame rate.")
     batch_parser.add_argument("--preview-image", type=Path, help="Write a rounded subtitle preview image before encoding.")
     batch_parser.add_argument("--preview-format", choices=["auto", "png", "jpg", "jpeg", "avif", "jxl"], default="auto", help="Preview image format. auto writes PNG for SDR and AVIF for HDR.")
@@ -738,22 +819,28 @@ def run(args: Namespace) -> None:
         if args.font_command == "list":
             records = list_fonts(args.font_dir)
             for record in records[: args.limit]:
-                print(f"{record.family}\t{record.path}\t{record.source}")
+                print(format_font_record(record))
             return
         if args.font_command == "search":
             records = search_fonts(args.query, args.font_dir)
             for record in records[: args.limit]:
-                print(f"{record.family}\t{record.path}\t{record.source}")
+                print(format_font_record(record))
             return
         if args.font_command == "match":
             record = match_font(args.name, args.font_dir)
             if not record:
                 raise ValueError(f"No font matched: {args.name}")
-            print(f"{record.family}\t{record.path}\t{record.source}")
+            print(format_font_record(record))
             return
+
+    if args.command == "transcode":
+        transcode_one(args)
+        return
 
     style = style_from_args(args)
     print_selected_default_fonts(args, style)
+    validate_explicit_fonts(args, style)
+    print_selected_font_faces(args, style)
     font_rules = load_font_rules(args)
     if args.command == "ass":
         play_res = parse_play_res(args.play_res) if args.play_res else None

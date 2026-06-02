@@ -72,7 +72,7 @@ def load_font(font_name: str, size: int, font_file: Path | None = None) -> Image
     matched = resolve_font_file(font_name)
     if matched:
         candidates.append(matched)
-    # Fallback: scan system fonts on Windows/macOS without fontconfig
+    # If fontconfig cannot resolve the face, fall back to CaptionForge's scanner.
     if not matched:
         from .fonts import match_font
         record = match_font(font_name)
@@ -390,9 +390,9 @@ def save_composited_preview(
 
 def _build_segments(events: list[tuple[float, float, int, str]], duration: float) -> list[tuple[float, float, list[str]]]:
     """Build non-overlapping segments with deduplicated texts."""
-    # Sort by start time
+    # Keep overlapping tracks deterministic before building segment boundaries.
     sorted_events = sorted(events, key=lambda x: (x[0], x[2]))
-    # Build timeline points
+    # Segment boundaries are every subtitle start/end plus the video bounds.
     points: set[float] = {0.0, duration}
     for start, end, _, _ in sorted_events:
         points.add(start)
@@ -450,7 +450,7 @@ def rounded_subtitles(
     ffmpeg = ffmpeg_path()
     color_info = probe_color_info(video)
 
-    # Dim subtitle colors for HDR so they don't blow out on HDR displays
+    # HDR subtitles need lower SDR RGB values to avoid excessive brightness.
     transfer = color_info.get("color_transfer")
     if transfer == "smpte2084":  # PQ
         scaled = replace(
@@ -512,7 +512,7 @@ def rounded_subtitles(
                 idx, text_key, frame_path = future.result()
                 seg_start, seg_end, _ = segments[idx]
                 seg_dur = seg_end - seg_start
-                # Store in order; concat order matters
+                # Preserve segment order because the concat demuxer is order-sensitive.
                 if not verbose and total > 1 and (future_idx + 1) % max(1, total // 100) == 0 or future_idx == total - 1:
                     pct = (future_idx + 1) / total * 100
                     elapsed = time.time() - t0
@@ -535,7 +535,7 @@ def rounded_subtitles(
                 last_frame = seen_frames[tuple(segments[-1][2])]
                 cf.write(f"file '{last_frame.as_posix()}'\n")
 
-        # Step 1: Build VFR overlay video
+        # Build a VFR overlay so static subtitle states are encoded only once.
         overlay_cmd = [
             ffmpeg,
             "-y",
@@ -553,7 +553,7 @@ def rounded_subtitles(
             print("[CaptionForge] ffmpeg: building VFR overlay video...")
         subprocess.run(overlay_cmd, check=True)
 
-        # Step 2: Overlay onto main video
+        # Composite the overlay video onto the source frames.
         if output_res:
             filter_complex = f"[0:v]scale={width}:{height}:flags=lanczos[base];[base][1:v]overlay=0:0:format=auto"
         else:
@@ -621,7 +621,7 @@ def rounded_subtitles(
                 line = line.strip()
                 if line.startswith("out_time_ms="):
                     try:
-                        # ffmpeg -progress outputs microseconds in out_time_ms
+                        # ffmpeg reports out_time_ms in microseconds despite the field name.
                         us = int(line.split("=", 1)[1])
                         elapsed_vid = us / 1_000_000
                         pct = min(100.0, elapsed_vid / max(duration, 0.001) * 100)

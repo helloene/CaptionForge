@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from captionforge.styles import CaptionStyle, apply_style_override, ass_color, font_collection_index, font_family_name, rgb_alpha, scaled_style
+from captionforge.styles import CaptionStyle, apply_style_override, ass_color, font_collection_index, font_family_name, font_names, rgb_alpha, scaled_style
 
 
 def test_ass_color_converts_rgb_to_ass_bgr_with_alpha():
@@ -63,6 +63,45 @@ def test_font_family_name_reads_first_font_from_collection(monkeypatch):
     monkeypatch.setattr("fontTools.ttLib.TTCollection", FakeCollection)
 
     assert font_family_name(Path("example.ttc")) == "Collection Sans"
+
+
+def test_font_names_reads_family_full_and_postscript(monkeypatch):
+    class FakeName:
+        def __init__(self, value, name_id):
+            self.value = value
+            self.nameID = name_id
+
+        def toUnicode(self):
+            return self.value
+
+    class FakeNameTable:
+        names = []
+
+        def getName(self, name_id, platform_id, encoding_id, language_id):
+            values = {
+                1: "Example Sans",
+                4: "Example Sans Regular",
+                6: "ExampleSans-Regular",
+            }
+            value = values.get(name_id)
+            return FakeName(value, name_id) if value else None
+
+    class FakeFont:
+        def __getitem__(self, key):
+            assert key == "name"
+            return FakeNameTable()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("fontTools.ttLib.TTFont", lambda path: FakeFont())
+
+    names = font_names(Path("example.ttf"))
+
+    assert names.family == "Example Sans"
+    assert names.full_name == "Example Sans Regular"
+    assert names.postscript_name == "ExampleSans-Regular"
+    assert names.selected("postscript") == "ExampleSans-Regular"
 
 
 def test_font_collection_index_matches_family_name(monkeypatch):

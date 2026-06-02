@@ -29,6 +29,7 @@ CaptionForge 是一个命令行字幕工具，用于把字幕文件稳定地变�
 - 支持字体名称或本地 TTF/OTF 字体文件
 - 自动探测视频分辨率，写入 `PlayResX/PlayResY`，并按 1080p 参考高度缩放样式
 - 硬字幕输出支持质量预设
+- 支持独立视频转码到 H.264、H.265/HEVC、AV1 或实验性的 H.266/VVC
 - 批量匹配字幕，输出文件名自动带字幕标签，并支持多版本导出
 - 批量任务支持并发处理和整体进度
 - 圆角模式自动探测视频帧率以同步 overlay
@@ -67,9 +68,11 @@ git sparse-checkout set skills/captionforge-cli
 
 ## 环境要求
 
-CaptionForge 需要 `ffmpeg` 和 `ffprobe`。
+CaptionForge 是源码/CLI 工具，**不会自带** `ffmpeg` 和 `ffprobe`。
+需要你在系统里单独安装，或者用环境变量显式指定二进制路径。
+这和某些会内置 FFmpeg 的打包桌面客户端不同。
 
-ASS 硬字幕渲染要求 ffmpeg 包含 `ass` 或 `subtitles` 滤镜，也就是需要启用 libass。
+ASS 硬字幕渲染要求 ffmpeg 包含 `ass` 或 `subtitles` 滤镜，也就是需要启用 libass。精简版 ffmpeg 可能能处理普通转码，但在烧录 ASS 字幕时会失败。
 
 macOS + Homebrew 环境下，普通 `ffmpeg` formula 可能不包含 libass。建议安装：
 
@@ -79,7 +82,7 @@ brew install ffmpeg-full
 
 `ffmpeg-full` 是 keg-only，不会自动替换系统里的默认 `ffmpeg`。CaptionForge 会自动检查常见 Homebrew 路径，例如 `/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg`，因此通常不需要手动替换默认 ffmpeg。
 
-Windows 上请安装包含 libass 的 ffmpeg 构建，并确保 `ffmpeg.exe` 和 `ffprobe.exe` 在 `PATH` 中；也可以通过 `CAPTIONFORGE_FFMPEG` 和 `CAPTIONFORGE_FFPROBE` 显式指定路径。
+Windows 上请下载包含 libass 的 full/static ffmpeg 构建，例如 Gyan.dev 或 BtbN 的构建。然后把包含 `ffmpeg.exe` 和 `ffprobe.exe` 的目录加入 `PATH`；也可以通过 `CAPTIONFORGE_FFMPEG` 和 `CAPTIONFORGE_FFPROBE` 显式指定这两个文件的路径。
 
 也可以显式指定二进制路径：
 
@@ -105,6 +108,8 @@ captionforge doctor
 | 现代圆角字幕框 | `captionforge burn in.mp4 sub.srt -o out.mp4 --render-mode rounded --template rounded` |
 | 白底黑字圆角字幕框 | `captionforge burn in.mp4 sub.srt -o out.mp4 --render-mode rounded --template rounded-white` |
 | 保留播放器可选字幕轨 | `captionforge burn in.mp4 sub.srt -o out.mp4 --mode soft` |
+| 不加字幕，把 H.264 转成 H.265/HEVC | `captionforge transcode in.mp4 -o out.mp4 --codec hevc --quality high` |
+| 实验性 H.266/VVC，使用 MOV 封装 | `captionforge transcode in.mp4 -o out.mov --codec h266 --quality high` |
 | 批量处理目录 | `captionforge batch ./videos -o ./out --dry-run` |
 | 只生成带样式的 ASS 文件 | `captionforge ass sub.srt -o styled.ass --play-res 1920x1080` |
 
@@ -151,6 +156,22 @@ captionforge batch ./videos -o ./out --render-mode ass --dry-run
 ```bash
 captionforge ass subtitles.vtt -o styled.ass \
   --play-res 1920x1080
+```
+
+把 H.264 转成 H.265/HEVC，同时保留源视频分辨率、帧时间轴和音频轨：
+
+```bash
+captionforge transcode input.mp4 -o output.mp4 \
+  --codec hevc \
+  --quality high
+```
+
+如果 ffmpeg 构建包含 `libvvenc`，也可以把视频写成 H.266/VVC + MOV：
+
+```bash
+captionforge transcode input.mp4 -o output.mov \
+  --codec h266 \
+  --quality high
 ```
 
 ## 批量工作流
@@ -444,7 +465,7 @@ captionforge font search noto --font-dir ./fonts
 - Windows 会额外扫描 `C:\\Windows\\Fonts` 和 `%LOCALAPPDATA%\\Microsoft\\Windows\\Fonts`。
 - macOS 会扫描 `/System/Library/Fonts`、`/Library/Fonts`、`~/Library/Fonts` 等系统和用户字体目录。
 - Linux 会扫描 `/usr/share/fonts`、`/usr/local/share/fonts`、`~/.fonts`、`~/.local/share/fonts` 等常见目录。
-- 字体 family name 会通过 `fontTools` 从 TTF/OTF/TTC 文件中读取。
+- 字体 family name、full name 和 PostScript name 会通过 `fontTools` 从 TTF/OTF/TTC 文件中读取。
 
 如果没有显式指定字体，CaptionForge 会从已安装字体里按 fallback 列表选择默认值。Latin 和 CJK 会分开选择，避免英文字母落到苹方这类中文字体上。fallback 顺序优先 macOS 字体，然后是 Linux/开源字体，最后是 Windows 字体：
 
@@ -472,6 +493,16 @@ captionforge burn movie.mp4 captions.srt -o out.mp4 \
   --cjk-font-file ./fonts/NotoSansSC-Regular.otf \
   --latin-font-file ./fonts/Inter-Regular.otf
 ```
+
+字体文件默认使用 family name。如果一个 family 里包含多个字重，需要强制到某个具体 face，可以改用字体文件里的 full name 或 PostScript name：
+
+```bash
+captionforge burn movie.mp4 captions.srt -o out.mp4 \
+  --latin-font-file ./fonts/Inter-Bold.otf \
+  --latin-font-name-source postscript
+```
+
+`captionforge font list`、`search`、`match` 会输出 family、full name、PostScript name、路径和来源。渲染命令开始前也会打印实际匹配到的 full name 和 PostScript name；显式指定的字体如果不能精确匹配 family、full name 或 PostScript name，会提前报错停止。
 
 ASS 模式还可以额外扫描字体目录：
 
@@ -545,14 +576,23 @@ captionforge burn movie.mp4 captions.srt -o out.mp4 --encoder auto
 - `--encoder nvenc`：NVIDIA NVENC（`h264_nvenc`、`hevc_nvenc` 或 `av1_nvenc`）
 - `--encoder qsv`：Intel Quick Sync（`h264_qsv`、`hevc_qsv` 或 `av1_qsv`）
 - `--encoder amf`：AMD AMF（`h264_amf`、`hevc_amf` 或 `av1_amf`）
-- 也可以直接指定精确编码器，例如 `libx264`、`libx265`、`libsvtav1`、`libaom-av1`、`hevc_nvenc`、`av1_qsv`
+- 也可以直接指定精确编码器，例如 `libx264`、`libx265`、`libsvtav1`、`libaom-av1`、`libvvenc`、`hevc_nvenc`、`av1_qsv`
 
-默认 `--codec auto` 会尽量跟随输入视频的 h264/hevc/av1 codec。需要转码时也可以单独指定输出 codec：
+默认 `--codec auto` 会尽量跟随输入视频的 h264/hevc/av1/vvc codec。字幕渲染时需要转码，也可以单独指定输出 codec：
 
 ```bash
 captionforge burn movie.mp4 captions.srt -o out.mp4 --codec hevc --encoder nvenc
 captionforge burn movie.mp4 captions.srt -o out.mp4 --codec av1 --encoder auto
+captionforge burn movie.mp4 captions.srt -o out.mov --codec h266
 captionforge burn movie.mp4 captions.srt -o out.mp4 --encoder libsvtav1
+```
+
+如果只想做格式转换、不加字幕，用 `transcode`。它默认保留原分辨率和帧时间轴，音频直接复制；只有显式传 `--output-res` 才会缩放：
+
+```bash
+captionforge transcode movie.mp4 -o movie-hevc.mp4 --codec hevc --quality high
+captionforge transcode movie.mp4 -o movie-av1.mp4 --codec av1 --encoder auto
+captionforge transcode movie.mp4 -o movie-vvc.mov --codec vvc --quality high
 ```
 
 GPU 编码同时适用于 ASS 和 rounded 两种硬字幕渲染模式。如果自动选择的 VideoToolbox 编码失败，CaptionForge 会用同 codec 的 CPU 编码器重试。质量预设会映射到对应编码器参数，例如 VideoToolbox 使用 qscale，NVENC 使用 CQ，QSV 使用 global_quality，AMF 使用 CQP。
@@ -563,6 +603,17 @@ AV1 也遵循同样的自动选择规则：
 - Intel 机器上，如果 ffmpeg 提供 `av1_qsv`，会自动使用。
 - AMD 机器上，如果 ffmpeg 提供 `av1_amf`，会自动使用。
 - Apple Silicon 通常没有 AV1 VideoToolbox 硬件编码器，所以 AV1 会跳过 VideoToolbox，继续尝试其他可用 GPU encoder，最后回退到 CPU（优先 `libsvtav1`，其次 `libaom-av1`）。
+
+H.266/VVC 只通过 `libvvenc` 支持。你的 ffmpeg 必须启用 `--enable-libvvenc`；CaptionForge 会把 `--codec h266` 归一为 `vvc`，使用 `libvvenc`，并用 VVenC 的 QP 参数映射 `--quality`。MOV 封装通过 `.mov` 输出路径选择，但 VVC 的播放器兼容性仍明显弱于 H.264、HEVC 和 AV1。
+
+## HDR 字幕亮度
+
+当源视频使用 HDR PQ（`smpte2084`）或 HLG（`arib-std-b67`）时，CaptionForge 会自动降低字幕颜色亮度，避免字幕在 HDR 显示设备上过亮：
+
+- **PQ**：字幕颜色缩放到约 50%（把 SDR 白色映射到 PQ 空间约 100 nits）
+- **HLG**：字幕颜色缩放到约 75%（HLG 的亮度余量较小）
+
+输出文件也会保留色彩 primaries 和 transfer 元数据，让播放器正确进入 HDR 模式。
 
 ## 故障排查
 
