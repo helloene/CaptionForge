@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from captionforge.ffmpeg import burn_subtitles, encode_args, escape_filter_path, ffmpeg_path, probe_fps, probe_video_codec, select_encoder, soft_subtitles, transcode_video
+from captionforge.ffmpeg import burn_subtitles, codec_encoders, encode_args, escape_filter_path, ffmpeg_path, probe_fps, probe_video_codec, select_encoder, soft_subtitles, transcode_video
 
 
 def test_escape_filter_path_escapes_filtergraph_special_chars():
@@ -13,6 +13,10 @@ def test_escape_filter_path_escapes_filtergraph_special_chars():
 
 def test_encode_args_uses_webm_codec_for_webm():
     assert encode_args(Path("out.webm"), "medium") == ["-c:v", "libvpx-vp9", "-crf", "28", "-b:v", "0"]
+
+
+def test_encode_args_supports_explicit_vp9_encoder():
+    assert encode_args(Path("out.mp4"), "high", "libvpx-vp9") == ["-c:v", "libvpx-vp9", "-crf", "23", "-b:v", "0"]
 
 
 def test_encode_args_supports_hevc_software_encoder():
@@ -88,6 +92,33 @@ def test_select_encoder_uses_vvc_software_encoder(monkeypatch):
     assert select_encoder("auto", "vvc", "/opt/ffmpeg/bin/ffmpeg") == "libvvenc"
 
 
+def test_select_encoder_uses_vp9_software_encoder(monkeypatch):
+    monkeypatch.setattr("captionforge.ffmpeg.available_encoders", lambda ffmpeg=None: {"libvpx-vp9"})
+
+    assert select_encoder("auto", "vp9", "/opt/ffmpeg/bin/ffmpeg") == "libvpx-vp9"
+
+
+def test_codec_encoders_reads_ffmpeg_codecs(monkeypatch):
+    class Result:
+        stdout = """
+ DEV.L. prores               Apple ProRes (iCodec Pro) (encoders: prores prores_aw prores_ks )
+ DEV.L. vp9                  Google VP9 (encoders: libvpx-vp9 vp9_qsv )
+"""
+
+    monkeypatch.setattr("captionforge.ffmpeg.available_encoders", lambda ffmpeg=None: {"prores_ks", "libvpx-vp9"})
+    monkeypatch.setattr("captionforge.ffmpeg.subprocess.run", lambda *args, **kwargs: Result())
+
+    assert codec_encoders("prores", "/opt/ffmpeg/bin/ffmpeg") == ["prores_ks"]
+    assert codec_encoders("vp9", "/opt/ffmpeg/bin/ffmpeg") == ["libvpx-vp9"]
+
+
+def test_select_encoder_uses_ffmpeg_codec_list_for_unknown_codec(monkeypatch):
+    monkeypatch.setattr("captionforge.ffmpeg.available_encoders", lambda ffmpeg=None: {"prores_ks"})
+    monkeypatch.setattr("captionforge.ffmpeg.codec_encoders", lambda codec, ffmpeg=None: ["prores_ks"] if codec == "prores" else [])
+
+    assert select_encoder("auto", "prores", "/opt/ffmpeg/bin/ffmpeg") == "prores_ks"
+
+
 def test_ffmpeg_env_override(monkeypatch):
     monkeypatch.setenv("CAPTIONFORGE_FFMPEG", "/bin/echo")
     assert ffmpeg_path() == "/bin/echo"
@@ -121,6 +152,16 @@ def test_probe_video_codec_maps_vvc(monkeypatch, tmp_path):
     monkeypatch.setattr("captionforge.ffmpeg.subprocess.run", lambda *args, **kwargs: Result())
 
     assert probe_video_codec(tmp_path / "in.mov") == "vvc"
+
+
+def test_probe_video_codec_maps_vp9(monkeypatch, tmp_path):
+    class Result:
+        stdout = "vp9\n"
+
+    monkeypatch.setattr("captionforge.ffmpeg.ffprobe_path", lambda: "/bin/echo")
+    monkeypatch.setattr("captionforge.ffmpeg.subprocess.run", lambda *args, **kwargs: Result())
+
+    assert probe_video_codec(tmp_path / "in.webm") == "vp9"
 
 
 def test_burn_subtitles_uses_quiet_ffmpeg(monkeypatch, tmp_path):

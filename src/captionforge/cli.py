@@ -36,7 +36,7 @@ from .templates import BUILTIN_TEMPLATES, load_template, style_from_template, te
 VIDEO_EXTENSIONS = {".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi"}
 SUBTITLE_EXTENSIONS = {".srt", ".ass", ".ssa", ".vtt", ".sub"}
 FONT_EXTENSIONS = {".ttf", ".ttc", ".otf", ".otc"}
-CODEC_CHOICES = ["auto", "h264", "hevc", "av1", "vvc", "h266"]
+CODEC_EXAMPLES = ["auto", "h264", "hevc", "av1", "vp9", "vvc", "h266"]
 DEFAULT_SUBTITLE_TAGS = ["zh", "zh-cn", "zh-hans", "zh-hant", "cn", "chs", "cht"]
 LANG_SEPARATORS = ".-_ "
 FIELD_RE = re.compile(r"[._\-\s]+")
@@ -737,8 +737,8 @@ def build_parser() -> ArgumentParser:
     burn_parser.add_argument("--render-mode", choices=["ass", "rounded"], default="ass", help="Hard-subtitle renderer.")
     burn_parser.add_argument("--multi-subtitle-layout", choices=["stack", "merge"], default="stack", help="For multiple ASS subtitles: stack separate lines or merge active text with line breaks.")
     burn_parser.add_argument("--quality", choices=QUALITY_PRESETS.keys(), default="medium", help="Encoding quality for hard mode.")
-    burn_parser.add_argument("--encoder", choices=ENCODER_CHOICES, default="auto", help="Video encoder platform or exact ffmpeg encoder. auto picks VideoToolbox on macOS, then NVENC > QSV > AMF > CPU.")
-    burn_parser.add_argument("--codec", choices=CODEC_CHOICES, default="auto", help="Output video codec. auto follows h264/hevc/av1/vvc input when possible; h266 is an alias for vvc.")
+    burn_parser.add_argument("--encoder", default="auto", metavar="ENCODER", help=f"Video encoder platform or exact ffmpeg encoder. auto picks VideoToolbox on macOS, then NVENC > QSV > AMF > CPU. Examples: {', '.join(ENCODER_CHOICES)}.")
+    burn_parser.add_argument("--codec", default="auto", metavar="CODEC", help=f"Output video codec. auto follows known input codecs when possible; h266 is an alias for vvc. Examples: {', '.join(CODEC_EXAMPLES)}.")
     burn_parser.add_argument("--rounded-fps", type=int, default=None, help="Overlay frame rate for rounded render mode. Defaults to video frame rate.")
     burn_parser.add_argument("--preview-image", type=Path, help="Write a rounded subtitle preview image before encoding.")
     burn_parser.add_argument("--preview-format", choices=["auto", "png", "jpg", "jpeg", "avif", "jxl"], default="auto", help="Preview image format. auto writes PNG for SDR and AVIF for HDR.")
@@ -752,8 +752,8 @@ def build_parser() -> ArgumentParser:
     transcode_parser.add_argument("video", type=Path)
     transcode_parser.add_argument("-o", "--output", type=Path, required=True)
     transcode_parser.add_argument("--quality", choices=QUALITY_PRESETS.keys(), default="medium", help="Encoding quality. high keeps more detail; medium is smaller.")
-    transcode_parser.add_argument("--encoder", choices=ENCODER_CHOICES, default="auto", help="Video encoder platform or exact ffmpeg encoder. auto picks VideoToolbox on macOS, then NVENC > QSV > AMF > CPU.")
-    transcode_parser.add_argument("--codec", choices=CODEC_CHOICES, default="auto", help="Output video codec. Use hevc for H.265 or vvc/h266 for H.266.")
+    transcode_parser.add_argument("--encoder", default="auto", metavar="ENCODER", help=f"Video encoder platform or exact ffmpeg encoder. auto picks VideoToolbox on macOS, then NVENC > QSV > AMF > CPU. Examples: {', '.join(ENCODER_CHOICES)}.")
+    transcode_parser.add_argument("--codec", default="auto", metavar="CODEC", help=f"Output video codec. Use hevc for H.265, vp9 for VP9, or vvc/h266 for H.266. Examples: {', '.join(CODEC_EXAMPLES)}.")
     transcode_parser.add_argument("--output-res", help="Force output video resolution, formatted like 3840x2160. Defaults to the input video resolution.")
     transcode_parser.add_argument("--ffmpeg-arg", action="append", default=[], help="Extra ffmpeg output argument; repeat as needed.")
     transcode_parser.add_argument("--verbose-ffmpeg", action="store_true", help="Show ffmpeg progress and diagnostic logs.")
@@ -774,8 +774,8 @@ def build_parser() -> ArgumentParser:
     batch_parser.add_argument("--render-mode", choices=["ass", "rounded"], default="ass", help="Hard-subtitle renderer.")
     batch_parser.add_argument("--multi-subtitle-layout", choices=["stack", "merge"], default="stack", help="For multiple ASS subtitles: stack separate lines or merge active text with line breaks.")
     batch_parser.add_argument("--quality", choices=QUALITY_PRESETS.keys(), default="medium", help="Encoding quality for hard mode.")
-    batch_parser.add_argument("--encoder", choices=ENCODER_CHOICES, default="auto", help="Video encoder platform or exact ffmpeg encoder. auto picks VideoToolbox on macOS, then NVENC > QSV > AMF > CPU.")
-    batch_parser.add_argument("--codec", choices=CODEC_CHOICES, default="auto", help="Output video codec. auto follows h264/hevc/av1/vvc input when possible; h266 is an alias for vvc.")
+    batch_parser.add_argument("--encoder", default="auto", metavar="ENCODER", help=f"Video encoder platform or exact ffmpeg encoder. auto picks VideoToolbox on macOS, then NVENC > QSV > AMF > CPU. Examples: {', '.join(ENCODER_CHOICES)}.")
+    batch_parser.add_argument("--codec", default="auto", metavar="CODEC", help=f"Output video codec. auto follows known input codecs when possible; h266 is an alias for vvc. Examples: {', '.join(CODEC_EXAMPLES)}.")
     batch_parser.add_argument("--rounded-fps", type=int, default=None, help="Overlay frame rate for rounded render mode. Defaults to video frame rate.")
     batch_parser.add_argument("--preview-image", type=Path, help="Write a rounded subtitle preview image before encoding.")
     batch_parser.add_argument("--preview-format", choices=["auto", "png", "jpg", "jpeg", "avif", "jxl"], default="auto", help="Preview image format. auto writes PNG for SDR and AVIF for HDR.")

@@ -29,7 +29,7 @@ It is designed for workflows that need precise subtitle styling and predictable 
 - Font names or local TTF/OTF font files
 - Automatic video resolution probing, `PlayResX/PlayResY` writing, and style scaling from a 1080p reference
 - Quality presets for hard-burned output
-- Standalone video transcoding to H.264, H.265/HEVC, AV1, or experimental H.266/VVC
+- Standalone video transcoding to H.264, H.265/HEVC, AV1, VP9, experimental H.266/VVC, or other codecs exposed by your ffmpeg build
 - Batch matching, subtitle labels in output filenames, and multi-version exports
 - Parallel batch jobs with whole-batch progress
 - Automatic video frame-rate probing for rounded overlay sync
@@ -109,6 +109,7 @@ Use this table first:
 | White rounded caption box with black text | `captionforge burn in.mp4 sub.srt -o out.mp4 --render-mode rounded --template rounded-white` |
 | Keep subtitles selectable in the player | `captionforge burn in.mp4 sub.srt -o out.mp4 --mode soft` |
 | Convert H.264 to H.265/HEVC without subtitles | `captionforge transcode in.mp4 -o out.mp4 --codec hevc --quality high` |
+| Convert to VP9/WebM without subtitles | `captionforge transcode in.mp4 -o out.webm --codec vp9 --quality high` |
 | Experimental H.266/VVC output in MOV | `captionforge transcode in.mp4 -o out.mov --codec h266 --quality high` |
 | Batch a folder | `captionforge batch ./videos -o ./out --dry-run` |
 | Generate styled ASS only | `captionforge ass sub.srt -o styled.ass --play-res 1920x1080` |
@@ -558,7 +559,7 @@ Example:
 captionforge burn movie.mp4 captions.srt -o out.mp4 --quality high
 ```
 
-## GPU Encoding
+## GPU And Codec Encoding
 
 CaptionForge can automatically use hardware encoders when available:
 
@@ -576,22 +577,28 @@ Encoder options:
 - `--encoder nvenc`: NVIDIA NVENC (`h264_nvenc`, `hevc_nvenc`, or `av1_nvenc`)
 - `--encoder qsv`: Intel Quick Sync (`h264_qsv`, `hevc_qsv`, or `av1_qsv`)
 - `--encoder amf`: AMD AMF (`h264_amf`, `hevc_amf`, or `av1_amf`)
-- Exact encoder names such as `libx264`, `libx265`, `libsvtav1`, `libaom-av1`, `libvvenc`, `hevc_nvenc`, or `av1_qsv`
+- Exact ffmpeg encoder names such as `libx264`, `libx265`, `libvpx-vp9`, `libsvtav1`, `libaom-av1`, `libvvenc`, `prores_ks`, `hevc_nvenc`, or `av1_qsv`
 
-By default, `--codec auto` follows h264/hevc/av1/vvc input videos when possible. Choose the output video codec separately when you want to transcode during subtitle rendering:
+By default, `--codec auto` follows known input video codecs when possible, including h264/hevc/av1/vp8/vp9/vvc. Choose the output video codec separately when you want to transcode during subtitle rendering:
 
 ```bash
 captionforge burn movie.mp4 captions.srt -o out.mp4 --codec hevc --encoder nvenc
 captionforge burn movie.mp4 captions.srt -o out.mp4 --codec av1 --encoder auto
+captionforge burn movie.mp4 captions.srt -o out.webm --codec vp9 --encoder auto
+captionforge burn movie.mp4 captions.srt -o out.mov --codec prores --encoder auto
 captionforge burn movie.mp4 captions.srt -o out.mov --codec h266
 captionforge burn movie.mp4 captions.srt -o out.mp4 --encoder libsvtav1
 ```
+
+`--codec` and `--encoder` are not limited to the examples above. For unknown codecs, CaptionForge reads the selected ffmpeg build's `-codecs` output and uses the encoder list advertised there. If multiple encoders exist and you want a specific one, pass it directly with `--encoder`; use repeated `--ffmpeg-arg` options for custom encoder settings.
 
 For pure format conversion without subtitles, use `transcode`. It keeps the original resolution and frame timing unless `--output-res` is set, and copies audio without re-encoding:
 
 ```bash
 captionforge transcode movie.mp4 -o movie-hevc.mp4 --codec hevc --quality high
 captionforge transcode movie.mp4 -o movie-av1.mp4 --codec av1 --encoder auto
+captionforge transcode movie.mp4 -o movie-vp9.webm --codec vp9 --quality high
+captionforge transcode movie.mp4 -o movie-prores.mov --codec prores --encoder auto
 captionforge transcode movie.mp4 -o movie-vvc.mov --codec vvc --quality high
 ```
 

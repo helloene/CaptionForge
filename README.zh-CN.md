@@ -29,7 +29,7 @@ CaptionForge 是一个命令行字幕工具，用于把字幕文件稳定地变�
 - 支持字体名称或本地 TTF/OTF 字体文件
 - 自动探测视频分辨率，写入 `PlayResX/PlayResY`，并按 1080p 参考高度缩放样式
 - 硬字幕输出支持质量预设
-- 支持独立视频转码到 H.264、H.265/HEVC、AV1 或实验性的 H.266/VVC
+- 支持独立视频转码到 H.264、H.265/HEVC、AV1、VP9、实验性的 H.266/VVC，或当前 ffmpeg 构建暴露的其他 codec
 - 批量匹配字幕，输出文件名自动带字幕标签，并支持多版本导出
 - 批量任务支持并发处理和整体进度
 - 圆角模式自动探测视频帧率以同步 overlay
@@ -109,6 +109,7 @@ captionforge doctor
 | 白底黑字圆角字幕框 | `captionforge burn in.mp4 sub.srt -o out.mp4 --render-mode rounded --template rounded-white` |
 | 保留播放器可选字幕轨 | `captionforge burn in.mp4 sub.srt -o out.mp4 --mode soft` |
 | 不加字幕，把 H.264 转成 H.265/HEVC | `captionforge transcode in.mp4 -o out.mp4 --codec hevc --quality high` |
+| 不加字幕，转成 VP9/WebM | `captionforge transcode in.mp4 -o out.webm --codec vp9 --quality high` |
 | 实验性 H.266/VVC，使用 MOV 封装 | `captionforge transcode in.mp4 -o out.mov --codec h266 --quality high` |
 | 批量处理目录 | `captionforge batch ./videos -o ./out --dry-run` |
 | 只生成带样式的 ASS 文件 | `captionforge ass sub.srt -o styled.ass --play-res 1920x1080` |
@@ -558,7 +559,7 @@ captionforge burn movie.mp4 captions.srt -o out.mp4 --font-rules font-rules.json
 captionforge burn movie.mp4 captions.srt -o out.mp4 --quality high
 ```
 
-## GPU / HEVC / AV1 编码
+## GPU 与 Codec 编码
 
 CaptionForge 可以自动使用可用的硬件编码器：
 
@@ -576,22 +577,28 @@ captionforge burn movie.mp4 captions.srt -o out.mp4 --encoder auto
 - `--encoder nvenc`：NVIDIA NVENC（`h264_nvenc`、`hevc_nvenc` 或 `av1_nvenc`）
 - `--encoder qsv`：Intel Quick Sync（`h264_qsv`、`hevc_qsv` 或 `av1_qsv`）
 - `--encoder amf`：AMD AMF（`h264_amf`、`hevc_amf` 或 `av1_amf`）
-- 也可以直接指定精确编码器，例如 `libx264`、`libx265`、`libsvtav1`、`libaom-av1`、`libvvenc`、`hevc_nvenc`、`av1_qsv`
+- 也可以直接指定 ffmpeg 的精确编码器，例如 `libx264`、`libx265`、`libvpx-vp9`、`libsvtav1`、`libaom-av1`、`libvvenc`、`prores_ks`、`hevc_nvenc`、`av1_qsv`
 
-默认 `--codec auto` 会尽量跟随输入视频的 h264/hevc/av1/vvc codec。字幕渲染时需要转码，也可以单独指定输出 codec：
+默认 `--codec auto` 会尽量跟随已知输入视频 codec，包括 h264/hevc/av1/vp8/vp9/vvc。字幕渲染时需要转码，也可以单独指定输出 codec：
 
 ```bash
 captionforge burn movie.mp4 captions.srt -o out.mp4 --codec hevc --encoder nvenc
 captionforge burn movie.mp4 captions.srt -o out.mp4 --codec av1 --encoder auto
+captionforge burn movie.mp4 captions.srt -o out.webm --codec vp9 --encoder auto
+captionforge burn movie.mp4 captions.srt -o out.mov --codec prores --encoder auto
 captionforge burn movie.mp4 captions.srt -o out.mov --codec h266
 captionforge burn movie.mp4 captions.srt -o out.mp4 --encoder libsvtav1
 ```
+
+`--codec` 和 `--encoder` 不限于上面的示例。对未知 codec，CaptionForge 会读取当前所选 ffmpeg 构建的 `-codecs` 输出，并使用其中声明的 encoder 列表。如果一个 codec 有多个 encoder，而你想指定具体实现，就直接传 `--encoder`；需要更细的编码参数时，用可重复的 `--ffmpeg-arg`。
 
 如果只想做格式转换、不加字幕，用 `transcode`。它默认保留原分辨率和帧时间轴，音频直接复制；只有显式传 `--output-res` 才会缩放：
 
 ```bash
 captionforge transcode movie.mp4 -o movie-hevc.mp4 --codec hevc --quality high
 captionforge transcode movie.mp4 -o movie-av1.mp4 --codec av1 --encoder auto
+captionforge transcode movie.mp4 -o movie-vp9.webm --codec vp9 --quality high
+captionforge transcode movie.mp4 -o movie-prores.mov --codec prores --encoder auto
 captionforge transcode movie.mp4 -o movie-vvc.mov --codec vvc --quality high
 ```
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 
@@ -98,6 +99,21 @@ def available_encoders(ffmpeg: str | None = None) -> set[str]:
     return names
 
 
+def codec_encoders(codec: str, ffmpeg: str | None = None) -> list[str]:
+    binary = ffmpeg or ffmpeg_path()
+    result = subprocess.run([binary, "-hide_banner", "-codecs"], check=True, capture_output=True, text=True)
+    available = available_encoders(ffmpeg)
+    for line in result.stdout.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) < 2 or parts[1] != codec:
+            continue
+        match = re.search(r"\(encoders:\s*([^)]+)\)", line)
+        if not match:
+            return []
+        return [encoder for encoder in match.group(1).split() if encoder in available]
+    return []
+
+
 _ENCODER_MAP = {
     "cpu": "cpu",
     "nvenc": "nvenc",
@@ -115,9 +131,12 @@ ENCODER_CHOICES = [
     "videotoolbox",
     "libx264",
     "libx265",
+    "libvpx",
+    "libvpx-vp9",
     "libsvtav1",
     "libaom-av1",
     "libvvenc",
+    "prores_ks",
     "h264_nvenc",
     "hevc_nvenc",
     "av1_nvenc",
@@ -136,19 +155,29 @@ _CODEC_SOFTWARE = {
     "hevc": "libx265",
     "av1": "libsvtav1",
     "vvc": "libvvenc",
+    "vp8": "libvpx",
+    "vp9": "libvpx-vp9",
 }
 
 
 def _software_encoder(codec: str, ffmpeg: str | None = None) -> str:
     encoders = available_encoders(ffmpeg)
-    sw = _CODEC_SOFTWARE.get(codec, "libx264")
-    if sw in encoders:
-        return sw
+    sw = _CODEC_SOFTWARE.get(codec)
+    candidates = [candidate for candidate in (sw, codec, f"lib{codec}") if candidate]
+    for candidate in candidates:
+        if candidate in encoders:
+            return candidate
     if codec == "av1" and "libaom-av1" in encoders:
         return "libaom-av1"
+    for candidate in codec_encoders(codec, ffmpeg):
+        if candidate in encoders:
+            return candidate
     if ffmpeg:
-        raise RuntimeError(f"No software encoder for codec {codec!r} is available in {ffmpeg}")
-    return sw
+        raise RuntimeError(
+            f"No automatic encoder for codec {codec!r} is available in {ffmpeg}. "
+            "Pass an exact ffmpeg encoder with --encoder, or use --ffmpeg-arg for custom output options."
+        )
+    return sw or codec
 
 
 def select_encoder(preferred: str | None = None, codec: str = "h264", ffmpeg: str | None = None) -> str:
@@ -157,9 +186,15 @@ def select_encoder(preferred: str | None = None, codec: str = "h264", ffmpeg: st
     if preferred and preferred != "auto":
         mapped = _ENCODER_MAP.get(preferred)
         if mapped:
+            encoders = available_encoders(ffmpeg)
             candidate = f"{codec}_{mapped}"
-            if candidate in available_encoders(ffmpeg):
+            if candidate in encoders:
                 return candidate
+            if codec in _CODEC_SOFTWARE:
+                return _software_encoder(codec, ffmpeg)
+            for codec_encoder in codec_encoders(codec, ffmpeg):
+                if codec_encoder.endswith(f"_{mapped}") and codec_encoder in encoders:
+                    return codec_encoder
             return _software_encoder(codec, ffmpeg)
         return preferred
     encoders = available_encoders(ffmpeg)
@@ -170,6 +205,15 @@ def select_encoder(preferred: str | None = None, codec: str = "h264", ffmpeg: st
         candidate = f"{codec}_{encoder_platform}"
         if candidate in encoders:
             return candidate
+    if codec in _CODEC_SOFTWARE:
+        return _software_encoder(codec, ffmpeg)
+    codec_encoder_names = codec_encoders(codec, ffmpeg)
+    for encoder_platform in platforms:
+        for codec_encoder in codec_encoder_names:
+            if codec_encoder.endswith(f"_{encoder_platform}") and codec_encoder in encoders:
+                return codec_encoder
+    if codec_encoder_names:
+        return codec_encoder_names[0]
     return _software_encoder(codec, ffmpeg)
 
 
@@ -194,14 +238,18 @@ def encode_args(output: Path, quality: str, encoder: str | None = None) -> list[
     if quality not in QUALITY_PRESETS:
         raise ValueError(f"Unknown quality {quality!r}; expected one of {', '.join(QUALITY_PRESETS)}")
     crf, preset = QUALITY_PRESETS[quality]
-    if output.suffix.lower() == ".webm":
-        return ["-c:v", "libvpx-vp9", "-crf", crf, "-b:v", "0"]
 
-    enc = encoder or "libx264"
+    enc = encoder or ("libvpx-vp9" if output.suffix.lower() == ".webm" else "libx264")
 
     # Software encoders share CRF-style quality control.
     if enc in ("libx264", "libx265"):
         return ["-c:v", enc, "-crf", crf, "-preset", preset]
+
+    if enc == "libvpx-vp9":
+        return ["-c:v", "libvpx-vp9", "-crf", crf, "-b:v", "0"]
+
+    if enc == "libvpx":
+        return ["-c:v", "libvpx", "-crf", crf, "-b:v", "0"]
 
     if enc == "libsvtav1":
         svt_preset = {"slow": "4", "medium": "6", "fast": "8"}.get(preset, "6")
@@ -290,6 +338,8 @@ def probe_video_codec(video: Path) -> str:
         return "av1"
     if codec in {"vvc", "h266"}:
         return "vvc"
+    if codec in {"vp8", "vp9"}:
+        return codec
     return "h264"
 
 

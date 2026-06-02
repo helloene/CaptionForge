@@ -219,6 +219,18 @@ def test_burn_command_accepts_exact_hevc_and_av1_encoders():
     assert av1_args.encoder == "libsvtav1"
 
 
+def test_commands_accept_arbitrary_ffmpeg_encoder_and_codec_names():
+    parser = build_parser()
+
+    vp9_args = parser.parse_args(["burn", "in.mp4", "captions.srt", "-o", "out.webm", "--codec", "vp9", "--encoder", "libvpx-vp9"])
+    prores_args = parser.parse_args(["transcode", "in.mp4", "-o", "out.mov", "--codec", "prores", "--encoder", "prores_ks"])
+
+    assert vp9_args.codec == "vp9"
+    assert vp9_args.encoder == "libvpx-vp9"
+    assert prores_args.codec == "prores"
+    assert prores_args.encoder == "prores_ks"
+
+
 def test_transcode_command_parses_hevc_request():
     args = build_parser().parse_args(["transcode", "in.mp4", "-o", "out.mp4", "--codec", "hevc", "--quality", "high"])
 
@@ -563,6 +575,7 @@ def test_resolve_codec_auto_follows_probe(monkeypatch, tmp_path):
     assert resolve_codec(tmp_path / "movie.mp4", "auto") == "hevc"
     assert resolve_codec(tmp_path / "movie.mp4", "h264") == "h264"
     assert resolve_codec(tmp_path / "movie.mp4", "h266") == "vvc"
+    assert resolve_codec(tmp_path / "movie.mp4", "vp9") == "vp9"
 
 
 def test_burn_one_sets_cpu_fallback_for_auto_videotoolbox(monkeypatch, tmp_path):

@@ -101,8 +101,9 @@ captionforge burn movie.mp4 captions.srt -o out.mp4 --mode soft
 - Encoder preference is VideoToolbox on macOS, then NVENC, QSV, AMF, and CPU fallback.
 - `--encoder cpu` forces software encoding.
 - Platform aliases include `videotoolbox`, `nvenc`, `qsv`, and `amf`.
-- Exact encoder names are also accepted, such as `libx264`, `libx265`, `libsvtav1`, `libaom-av1`, `libvvenc`, `hevc_nvenc`, or `av1_qsv`.
-- `--codec auto` follows h264/hevc/av1/vvc input videos when possible. Use `--codec h264`, `--codec hevc`, `--codec av1`, or `--codec vvc` to force output codec. `--codec h266` is an alias for `vvc`.
+- Exact encoder names are accepted directly from ffmpeg, such as `libx264`, `libx265`, `libvpx-vp9`, `libsvtav1`, `libaom-av1`, `libvvenc`, `hevc_nvenc`, `av1_qsv`, or `prores_ks`.
+- `--codec auto` follows known input videos when possible, including h264/hevc/av1/vp8/vp9/vvc. Use `--codec h264`, `--codec hevc`, `--codec av1`, `--codec vp9`, or `--codec vvc` to force output codec. `--codec h266` is an alias for `vvc`.
+- Codec and encoder arguments are not limited to CaptionForge's examples. For unknown codecs, CaptionForge reads the current ffmpeg build's `-codecs` output and uses the encoder list advertised there. If multiple encoders exist and you want a specific one, pass the exact ffmpeg encoder with `--encoder`; use repeated `--ffmpeg-arg` for custom output options.
 - H.266/VVC requires an ffmpeg build with `libvvenc`; it is treated as CPU software encoding and should be considered experimental for playback compatibility.
 - Start batch GPU work with `--jobs 2`; higher values can make ffmpeg processes compete for CPU, GPU, and disk bandwidth.
 - If automatic VideoToolbox encoding fails, CaptionForge retries with the CPU encoder for the same codec.
@@ -114,6 +115,8 @@ Common codec and encoder examples:
 captionforge burn movie.mp4 captions.srt -o out.mp4 --encoder auto
 captionforge burn movie.mp4 captions.srt -o out.mp4 --codec hevc --encoder nvenc
 captionforge burn movie.mp4 captions.srt -o out.mp4 --codec av1 --encoder auto
+captionforge burn movie.mp4 captions.srt -o out.webm --codec vp9 --encoder libvpx-vp9
+captionforge burn movie.mp4 captions.srt -o out.mov --codec prores --encoder auto
 captionforge burn movie.mp4 captions.srt -o out.mov --codec h266
 captionforge burn movie.mp4 captions.srt -o out.mp4 --encoder libsvtav1
 ```
